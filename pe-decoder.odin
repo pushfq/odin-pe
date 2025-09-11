@@ -412,17 +412,19 @@ image_load_from_memory :: proc(data: []byte) -> (result: Decoded_Image, err: Ima
    return
 }
 
-image_load_from_file :: proc(file_path: string) -> (result: Decoded_Image, err: Image_Decode_Error) {
+image_load_from_file :: proc(file_path: string) -> (Decoded_Image, Image_Decode_Error) {
    arena: virtual.Arena
 
    if virtual.arena_init_growing(&arena) == nil {
       data, success := os.read_entire_file(file_path, virtual.arena_allocator(&arena))
 
-      result.was_allocated = true
-
       if success {
-         result, err = image_load_from_memory(data)
-         return
+         result, err := image_load_from_memory(data)
+
+         result.arena = arena
+         result.was_allocated = true
+
+         return result, err
       }
    }
 
