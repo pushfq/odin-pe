@@ -194,6 +194,18 @@ Image_Section_Header :: struct #align(4) {
    characteristics:        Image_Section_Characteristics,
 }
 
+section_name :: proc(section_header: ^Image_Section_Header) -> []u8 {
+   length: int
+   for b in section_header.name {
+      if b == '\x00' {
+         break
+      }
+      length += 1
+   }
+
+   return section_header.name[:length]
+}
+
 Image_Subsystem :: enum u16le {
    UNKNOWN                  = 0,
    NATIVE                   = 1,
