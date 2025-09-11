@@ -274,7 +274,6 @@ _read_section_headers :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
    }
 
    total_size: int
-   low_data: int
    for i in 0 ..< want_sections {
       sh: Image_Section_Header
       if !_read_into_checked(rd, &sh) {
@@ -285,8 +284,6 @@ _read_section_headers :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
       if sh.size_of_raw_data > 0 {
          start := cast(int) sh.pointer_to_raw_data
          size := cast(int) sh.size_of_raw_data
-
-         low_data = min(low_data, start)
 
          if start < 0 || size < 0 || start + size > len(rd.s) {
             return false
