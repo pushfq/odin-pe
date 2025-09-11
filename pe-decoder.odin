@@ -10,6 +10,7 @@ Image_Decode_Error :: enum {
    BAD_DOS_HEADER,
    BAD_NT_HEADERS,
    BAD_SECTION,
+   BAD_RELOCATION,
 }
 
 Decoded_Optional_Header :: union {
@@ -17,16 +18,22 @@ Decoded_Optional_Header :: union {
    Image_Optional_Header64,
 }
 
-Decoded_Section_List :: struct {
-   section_pool: []u8,
-   headers:      [dynamic]Image_Section_Header,
+Decoded_Relocation :: struct {
+   type: Image_Based_Relocation_Type,
+   rva:  int,
 }
 
 Decoded_Image :: struct {
+   file_data:       []u8,
+   arena:           virtual.Arena,
+   was_allocated:   bool,
+
    dos_header:      Image_Dos_Header,
    file_header:     Image_File_Header,
    optional_header: Decoded_Optional_Header,
-   section_list:    Decoded_Section_List,
+
+   relocations:     [dynamic]Decoded_Relocation,
+   section_headers: [dynamic]Image_Section_Header,
 }
 
 @private
@@ -267,6 +274,7 @@ _read_section_headers :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
    }
 
    total_size: int
+   low_data: int
    for i in 0 ..< want_sections {
       sh: Image_Section_Header
       if !_read_into_checked(rd, &sh) {
@@ -276,7 +284,9 @@ _read_section_headers :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
       // If the section has initialized data on disk, the span must be in-bounds.
       if sh.size_of_raw_data > 0 {
          start := cast(int) sh.pointer_to_raw_data
-         size  := cast(int) sh.size_of_raw_data
+         size := cast(int) sh.size_of_raw_data
+
+         low_data = min(low_data, start)
 
          if start < 0 || size < 0 || start + size > len(rd.s) {
             return false
@@ -285,59 +295,106 @@ _read_section_headers :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
          total_size += size
       }
 
-      append(&img.section_list.headers, sh)
+      append(&img.section_headers, sh)
    }
-
-   img.section_list.section_pool = make([]u8, total_size)
 
    return true
 }
 
 @private
-_copy_section_data :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
-   // `_read_section_headers` initializes the pool for us.
-   pool := img.section_list.section_pool
+_read_based_relocations :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
+   read_u16_le := #force_inline proc "contextless" (b: []u8) -> u16 {
+      return cast(u16)(b[0]) | (cast(u16)(b[1]) << 8)
+   }
 
-   pool_off := 0
-   for i in 0 ..< len(img.section_list.headers) {
-      sh := img.section_list.headers[i]
-      size  := cast(int) sh.size_of_raw_data
-      start := cast(int) sh.pointer_to_raw_data
+   read_u32_le := #force_inline proc "contextless" (b: []u8) -> u32 {
+      return cast(u32)(b[0]) | (cast(u32)(b[1]) << 8) | (cast(u32)(b[2]) << 16) | (cast(u32)(b[3]) << 24)
+   }
 
-      // Skip sections without initialized raw data.
-      if size <= 0 {
+   // If relocations were stripped, nothing to read (valid image if it loads at preferred base).
+   // IMAGE_FILE_RELOCS_STRIPPED indicates no base relocations present.
+   if .RELOCS_STRIPPED in img.file_header.characteristics {
+      return true
+   }
+
+   // @TODO(Sonny): Just read this from the directory entry.
+   RELOC_SECTION_NAME :: ".reloc\x00\x00"
+
+   reloc_section: ^Image_Section_Header
+   for &section in img.section_headers {
+      if section.name == RELOC_SECTION_NAME {
+         reloc_section = &section
+      }
+   }
+
+   if reloc_section == nil {
+      return true
+   }
+
+   data := image_get_section_data_from_header(img, reloc_section)
+   if len(data) == 0 {
+      // Empty .reloc is permissible; nothing to do.
+      return true
+   }
+
+   off := 0
+   for {
+      if off + 8 > len(data) {
+         break
+      }
+
+      page_rva := read_u32_le(data[off+0 : off+4])
+      size_of_block := read_u32_le(data[off+4 : off+8])
+
+      if size_of_block < 8 || size_of_block == 0{
+         break
+      }
+
+      if off + cast(int) size_of_block > len(data) {
          continue
       }
 
-      src := rd.s[start:start+size]
-
-      if pool_off + size > len(pool) {
-         return false
+      entries_bytes := cast(int) size_of_block - 8
+      if (entries_bytes & 1) != 0 {
+         continue
       }
 
-      dst := pool[pool_off:pool_off+size]
+      entry_count := entries_bytes / 2
+      entries_base := off + 8
 
-      mem.copy(raw_data(dst), raw_data(src), size)
+      for i := 0; i < entry_count; i += 1 {
+         e := read_u16_le(data[entries_base + 2*i : entries_base + 2*i + 2])
 
-      pool_off += size
+         rel_type := cast(Image_Based_Relocation_Type)((e >> 12) & 0xF)
+         rel_off12 := cast(int)(e & 0x0FFF)
+
+         if rel_type == .ABSOLUTE {
+            continue
+         }
+
+         reloc: Decoded_Relocation
+         reloc.type = rel_type
+         reloc.rva  = cast(int) page_rva + rel_off12
+
+         append(&img.relocations, reloc)
+      }
+
+      off += cast(int) size_of_block
    }
 
    return true
 }
 
-@private
-_read_sections :: proc(img: ^Decoded_Image, rd: ^bytes.Reader) -> bool {
-   if !_read_section_headers(img, rd) {
-      return false
-   }
-
-   return _copy_section_data(img, rd)
+image_get_section_data_from_header :: proc(img: ^Decoded_Image, sh: ^Image_Section_Header) -> []u8 {
+   return img.file_data[sh.pointer_to_raw_data:sh.pointer_to_raw_data+sh.size_of_raw_data]
 }
 
 image_load_from_memory :: proc(data: []byte) -> (result: Decoded_Image, err: Image_Decode_Error) {
    rd: bytes.Reader
 
    bytes.reader_init(&rd, data)
+
+   result.file_data = data
 
    if !_read_dos_header(&result, &rd) {
       return {}, .BAD_DOS_HEADER
@@ -347,22 +404,28 @@ image_load_from_memory :: proc(data: []byte) -> (result: Decoded_Image, err: Ima
       return {}, .BAD_NT_HEADERS
    }
 
-   if !_read_sections(&result, &rd) {
+   if !_read_section_headers(&result, &rd) {
       return {}, .BAD_SECTION
+   }
+
+   if !_read_based_relocations(&result, &rd) {
+      return {}, .BAD_RELOCATION
    }
 
    return
 }
 
-image_load_from_file :: proc(file_path: string) -> (Decoded_Image, Image_Decode_Error) {
+image_load_from_file :: proc(file_path: string) -> (result: Decoded_Image, err: Image_Decode_Error) {
    arena: virtual.Arena
 
    if virtual.arena_init_growing(&arena) == nil {
-      defer virtual.arena_destroy(&arena)
-
       data, success := os.read_entire_file(file_path, virtual.arena_allocator(&arena))
+
+      result.was_allocated = true
+
       if success {
-         return image_load_from_memory(data)
+         result, err = image_load_from_memory(data)
+         return
       }
    }
 
@@ -370,6 +433,10 @@ image_load_from_file :: proc(file_path: string) -> (Decoded_Image, Image_Decode_
 }
 
 image_destroy :: proc(img: ^Decoded_Image) {
-   delete(img.section_list.headers)
-   delete(img.section_list.section_pool)
+   delete(img.relocations)
+   delete(img.section_headers)
+
+   if img.was_allocated {
+      virtual.arena_destroy(&img.arena)
+   }
 }
