@@ -1,6 +1,5 @@
 package pe
 
-import "core:fmt"
 import "core:os"
 import "core:bytes"
 import "core:mem"
