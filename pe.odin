@@ -6,52 +6,47 @@ import "core:mem/virtual"
 
 Decoded_Image :: struct {
    file_data:     []u8,
-   was_allocated: bool,
-   arena:         virtual.Arena,
+   owns_mapping:  bool,
 
    dos_header:      Image_DOS_Header,
    file_header:     Image_File_Header,
    optional_header: Wrapped_Optional_Header,
 
-
    section_headers:  [dynamic]Image_Section_Header,
    base_relocations: [dynamic]Base_Relocation_Entry,
 }
 
-image_load_from_memory :: proc(data: []byte) -> (result: Decoded_Image, ok: bool) {
-   r := reader_create(data)
+image_load_from_memory :: proc(img: ^Decoded_Image) -> bool {
+   r := reader_create(img.file_data)
 
-   read_dos_header        (&result, &r) or_return
-   read_nt_headers        (&result, &r) or_return
-   read_section_headers   (&result, &r) or_return
-   read_based_relocations (&result, &r) or_return
+   read_dos_header(img, &r) or_return
+   read_nt_headers(img, &r) or_return
+   read_section_headers(img, &r) or_return
+   read_based_relocations(img, &r) or_return
 
-   return result, true
+   return true
 }
 
-image_load_from_file :: proc(file_path: string) -> (Decoded_Image, bool) {
-   arena: virtual.Arena
-   if virtual.arena_init_growing(&arena) != nil {
+image_load_from_file :: proc(file_path: string) -> (result: Decoded_Image, err: bool) {
+   data, map_err := virtual.map_file_from_path(file_path, {.Read})
+   if map_err != nil {
       return {}, false
    }
 
-   data, success := os.read_entire_file(file_path, virtual.arena_allocator(&arena))
-   if !success {
-      return {}, false
-   }
+   result.file_data = data
+   result.owns_mapping = true
 
-   result, err := image_load_from_memory(data)
-   result.arena = arena
-   result.was_allocated = true
-   return result, err
+   image_load_from_memory(&result) or_return
+
+   return result, true
 }
 
 image_destroy :: proc(img: ^Decoded_Image) {
    delete(img.section_headers)
    delete(img.base_relocations)
 
-   if img.was_allocated {
-      virtual.arena_destroy(&img.arena)
+   if img.owns_mapping {
+      virtual.release(raw_data((img.file_data)), len(img.file_data))
    }
 }
 
