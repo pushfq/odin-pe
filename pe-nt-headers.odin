@@ -130,7 +130,7 @@ read_file_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
       return false
    }
 
-   optional_size  := cast(int) file_header.size_of_optional_header
+   optional_size := cast(int) file_header.size_of_optional_header
    if r.i + optional_size > len(r.s) {
       return false
    }
@@ -451,7 +451,7 @@ read_optional_rom :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_ROM_Opt
    if size_of(outh^) > opt_size {
       return false
    }
-   if !reader_read_n(r, cast(rawptr)&outh^, size_of(outh^)) {
+   if !reader_read_n(r, outh, size_of(outh^)) {
       return false
    }
    pad := opt_size - size_of(outh^)
@@ -491,7 +491,7 @@ read_optional_pe32 :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_Option
       return false
    }
 
-   if !reader_read_n(r, cast(rawptr)&outh^, base_size) {
+   if !reader_read_n(r, outh, base_size) {
       return false
    }
 
@@ -531,7 +531,7 @@ read_optional_pe32_plus :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_O
       return false
    }
 
-   if !reader_read_n(r, cast(rawptr)&outh^, base_size) {
+   if !reader_read_n(r, outh, base_size) {
       return false
    }
 
@@ -582,6 +582,7 @@ read_optional_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
       h32: Image_Optional_Header32
       read_optional_pe32(r, opt_size, &h32) or_return
       img.optional_header = _wrap_from_pe32(&h32)
+      validate_data_directories(img) or_return
       return true
    }
 
@@ -589,10 +590,17 @@ read_optional_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
       h64: Image_Optional_Header64
       read_optional_pe32_plus(r, opt_size, &h64) or_return
       img.optional_header = _wrap_from_pe64(&h64)
+      validate_data_directories(img) or_return
       return true
    }
 
    return false
+}
+
+validate_data_directories :: proc(img: ^Decoded_Image) -> bool {
+   // @TODO(Sonny): Validate that all directories live within the image.
+   //               Some entries take a file offset (IIRC), while others take a virtual address.
+   return true
 }
 
 read_nt_headers :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
