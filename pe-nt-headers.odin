@@ -607,3 +607,21 @@ read_nt_headers :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
 
    return true
 }
+
+get_directory_checked :: proc(h: ^Wrapped_Optional_Header, dir: Image_Data_Directories) -> (Image_Data_Directory, bool) {
+   if h.magic == IMAGE_OPTIONAL_HEADER_MAGIC_ROM {
+      return {}, false
+   }
+
+   if cast(int) dir >= cast(int) h.number_of_rva_and_sizes {
+      return {}, false
+   }
+
+   entry := h.data_directory[dir]
+
+   if entry.size == 0 || entry.virtual_address == 0 {
+      return {}, false
+   }
+
+   return entry, true
+}

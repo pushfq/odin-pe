@@ -91,3 +91,16 @@ read_section_headers :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
 
    return true
 }
+
+va_to_offset :: proc(headers: []Image_Section_Header, #any_int va: u32) -> (offset: u32, ok: bool) {
+   for sh in headers {
+      begin := cast(u32) sh.virtual_address
+      end := cast(u32)(sh.virtual_address + sh.size_of_raw_data)
+
+      if begin >= va && va <= end {
+         return cast(u32) sh.pointer_to_raw_data + (va - begin), true
+      }
+   }
+
+   return 0, false
+}

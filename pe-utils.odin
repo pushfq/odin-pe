@@ -49,6 +49,10 @@ reader_read_n :: proc(
    return true
 }
 
+reader_ensure_n :: proc(r: ^Binary_Reader, n: int) -> bool {
+   return r.i + n < len(r.s)
+}
+
 reader_seek :: proc(
    r: ^Binary_Reader,
    offset: int,
