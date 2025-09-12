@@ -27,7 +27,7 @@ read_based_relocations :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
       return true
    }
 
-   dir := get_directory_checked(&img.optional_header, .BASERELOC)   or_return
+   dir := optional_get_directory(&img.optional_header, .BASERELOC)   or_return
    off := image_va_to_offset(img, dir.virtual_address) or_return
 
    reader_seek(r, cast(int) off, .Start)

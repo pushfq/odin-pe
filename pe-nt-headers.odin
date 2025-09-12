@@ -113,7 +113,8 @@ Image_File_Header :: struct #align(4) {
    characteristics:         Image_File_Characteristics,
 }
 
-read_file_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
+@private
+_read_file_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
    file_header: Image_File_Header
    if !reader_read_n(r, &file_header, size_of(file_header)) {
       return false
@@ -302,15 +303,15 @@ Image_Optional_Header64 :: struct #align(4) {
    data_directory:                 [Image_Data_Directories]Image_Data_Directory,
 }
 
-size_of_directories :: proc "contextless" (header: ^$T) -> int {
+optional_header_size_of_directories :: proc "contextless" (header: ^$T) -> int {
    return cast(int) header.number_of_rva_and_sizes * size_of(Image_Data_Directory)
 }
 
-expected_optional_header_size :: proc "contextless" (header: ^$T) -> int {
-   return size_of(T) - size_of(header.data_directory) + size_of_directories(header)
+optional_header_expected_size :: proc "contextless" (header: ^$T) -> int {
+   return size_of(T) - size_of(header.data_directory) + optional_header_size_of_directories(header)
 }
 
-base_optional_header_size :: proc "contextless" ($T: typeid) -> int {
+optional_header_base_size :: proc "contextless" ($T: typeid) -> int {
    return size_of(T) - size_of(T{}.data_directory)
 }
 
@@ -352,6 +353,7 @@ Wrapped_Optional_Header :: struct {
    data_directory:                 [Image_Data_Directories]Image_Data_Directory,
 }
 
+@private
 _wrap_from_rom :: proc(src: ^Image_ROM_Optional_Header) -> (w: Wrapped_Optional_Header) {
    w.magic                          = src.magic
    w.major_linker_version           = src.major_linker_version
@@ -370,6 +372,7 @@ _wrap_from_rom :: proc(src: ^Image_ROM_Optional_Header) -> (w: Wrapped_Optional_
    return
 }
 
+@private
 _wrap_from_pe32 :: proc(src: ^Image_Optional_Header32) -> (w: Wrapped_Optional_Header) {
    w.magic                          = src.magic
    w.major_linker_version           = src.major_linker_version
@@ -447,21 +450,23 @@ _wrap_from_pe64 :: proc(src: ^Image_Optional_Header64) -> (w: Wrapped_Optional_H
    return
 }
 
-read_optional_rom :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_ROM_Optional_Header) -> bool {
-   if size_of(outh^) > opt_size {
+@private
+_read_optional_rom :: proc(r: ^Binary_Reader, opt_size: int, h: ^Image_ROM_Optional_Header) -> bool {
+   if size_of(h^) > opt_size {
       return false
    }
-   if !reader_read_n(r, outh, size_of(outh^)) {
+   if !reader_read_n(r, h, size_of(h^)) {
       return false
    }
-   pad := opt_size - size_of(outh^)
+   pad := opt_size - size_of(h^)
    if pad > 0 {
       reader_seek(r, pad, .Current)
    }
    return true
 }
 
-validate_optional_header32 :: proc(h: ^Image_Optional_Header32, size_of_optional_header: int) -> bool {
+@private
+_validate_optional_header32 :: proc(h: ^Image_Optional_Header32, size_of_optional_header: int) -> bool {
    if h.magic != IMAGE_OPTIONAL_HEADER_MAGIC_PE32 {
       return false
    }
@@ -470,10 +475,11 @@ validate_optional_header32 :: proc(h: ^Image_Optional_Header32, size_of_optional
       return false
    }
 
-   return expected_optional_header_size(h) == size_of_optional_header
+   return optional_header_expected_size(h) == size_of_optional_header
 }
 
-validate_optional_header64 :: proc(h: ^Image_Optional_Header64, size_of_optional_header: int) -> bool {
+@private
+_validate_optional_header64 :: proc(h: ^Image_Optional_Header64, size_of_optional_header: int) -> bool {
    if h.magic != IMAGE_OPTIONAL_HEADER_MAGIC_PE64 {
       return false
    }
@@ -482,25 +488,26 @@ validate_optional_header64 :: proc(h: ^Image_Optional_Header64, size_of_optional
       return false
    }
 
-   return expected_optional_header_size(h) == size_of_optional_header
+   return optional_header_expected_size(h) == size_of_optional_header
 }
 
-read_optional_pe32 :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_Optional_Header32) -> bool {
-   base_size := base_optional_header_size(Image_Optional_Header32)
+@private
+_read_optional_pe32 :: proc(r: ^Binary_Reader, opt_size: int, h: ^Image_Optional_Header32) -> bool {
+   base_size := optional_header_base_size(Image_Optional_Header32)
    if base_size > opt_size {
       return false
    }
 
-   if !reader_read_n(r, outh, base_size) {
+   if !reader_read_n(r, h, base_size) {
       return false
    }
 
-   if !validate_optional_header32(outh, opt_size) {
+   if !_validate_optional_header32(h, opt_size) {
       return false
    }
 
    remaining := opt_size - base_size
-   want_dirs := cast(int) outh.number_of_rva_and_sizes
+   want_dirs := cast(int) h.number_of_rva_and_sizes
    need_bytes := want_dirs * size_of(Image_Data_Directory)
 
    if need_bytes > remaining {
@@ -511,7 +518,7 @@ read_optional_pe32 :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_Option
       if idx >= want_dirs {
          break
       }
-      if !reader_read_n(r, cast(rawptr)&outh.data_directory[dir], size_of(Image_Data_Directory)) {
+      if !reader_read_n(r, cast(rawptr)&h.data_directory[dir], size_of(Image_Data_Directory)) {
          return false
       }
    }
@@ -524,23 +531,24 @@ read_optional_pe32 :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_Option
    return true
 }
 
-read_optional_pe32_plus :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_Optional_Header64) -> bool {
-   base_size := base_optional_header_size(Image_Optional_Header64)
+@private
+_read_optional_pe32_plus :: proc(r: ^Binary_Reader, opt_size: int, h: ^Image_Optional_Header64) -> bool {
+   base_size := optional_header_base_size(Image_Optional_Header64)
 
    if base_size > opt_size {
       return false
    }
 
-   if !reader_read_n(r, outh, base_size) {
+   if !reader_read_n(r, h, base_size) {
       return false
    }
 
-   if !validate_optional_header64(outh, opt_size) {
+   if !_validate_optional_header64(h, opt_size) {
       return false
    }
 
    remaining := opt_size - base_size
-   want_dirs := cast(int) outh.number_of_rva_and_sizes
+   want_dirs := cast(int) h.number_of_rva_and_sizes
    need_bytes := want_dirs * size_of(Image_Data_Directory)
 
    if need_bytes > remaining {
@@ -551,7 +559,7 @@ read_optional_pe32_plus :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_O
       if idx >= want_dirs {
          break
       }
-      if !reader_read_n(r, cast(rawptr)&outh.data_directory[dir], size_of(Image_Data_Directory)) {
+      if !reader_read_n(r, cast(rawptr)&h.data_directory[dir], size_of(Image_Data_Directory)) {
          return false
       }
    }
@@ -564,7 +572,8 @@ read_optional_pe32_plus :: proc(r: ^Binary_Reader, opt_size: int, outh: ^Image_O
    return true
 }
 
-read_optional_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
+@private
+_read_optional_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
    magic := reader_read_le(r, u16le) or_return
 
    reader_seek(r, -size_of(magic), .Current)
@@ -573,31 +582,32 @@ read_optional_header :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
 
    if magic == IMAGE_OPTIONAL_HEADER_MAGIC_ROM {
       rom: Image_ROM_Optional_Header
-      read_optional_rom(r, opt_size, &rom) or_return
+      _read_optional_rom(r, opt_size, &rom) or_return
       img.optional_header = _wrap_from_rom(&rom)
       return true
    }
 
    if magic == IMAGE_OPTIONAL_HEADER_MAGIC_PE32 {
       h32: Image_Optional_Header32
-      read_optional_pe32(r, opt_size, &h32) or_return
+      _read_optional_pe32(r, opt_size, &h32) or_return
       img.optional_header = _wrap_from_pe32(&h32)
-      validate_data_directories(img) or_return
+      _validate_data_directories(img) or_return
       return true
    }
 
    if magic == IMAGE_OPTIONAL_HEADER_MAGIC_PE64{
       h64: Image_Optional_Header64
-      read_optional_pe32_plus(r, opt_size, &h64) or_return
+      _read_optional_pe32_plus(r, opt_size, &h64) or_return
       img.optional_header = _wrap_from_pe64(&h64)
-      validate_data_directories(img) or_return
+      _validate_data_directories(img) or_return
       return true
    }
 
    return false
 }
 
-validate_data_directories :: proc(img: ^Decoded_Image) -> bool {
+@private
+_validate_data_directories :: proc(img: ^Decoded_Image) -> bool {
    // @TODO(Sonny): Validate that all directories live within the image.
    //               Some entries take a file offset (IIRC), while others take a virtual address.
    return true
@@ -610,13 +620,13 @@ read_nt_headers :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
       return false
    }
 
-   read_file_header(img, r)     or_return
-   read_optional_header(img, r) or_return
+   _read_file_header(img, r)     or_return
+   _read_optional_header(img, r) or_return
 
    return true
 }
 
-get_directory_checked :: proc(h: ^Wrapped_Optional_Header, dir: Image_Data_Directories) -> (Image_Data_Directory, bool) {
+optional_get_directory :: proc(h: ^Wrapped_Optional_Header, dir: Image_Data_Directories) -> (Image_Data_Directory, bool) {
    if h.magic == IMAGE_OPTIONAL_HEADER_MAGIC_ROM {
       return {}, false
    }

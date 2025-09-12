@@ -26,22 +26,8 @@ Image_Section_Flag :: enum {
    MEM_WRITE                    =  31,
 }
 
-extract_section_alignment :: proc "contextless" (characteristics: Image_Section_Characteristics) -> int {
-   align_bits := characteristics & IMAGE_SECTION_ALIGN_MASK
-
-   if align_bits != 0 {
-      return 1 << ((align_bits >> 20) - 1)
-   }
-
-   return 16
-}
-
 // Flags are also apart of the `characteristics` field... just without the alignment bits!
 Image_Section_Flags :: distinct bit_set[Image_Section_Flag; Image_Section_Characteristics]
-
-extract_section_flags :: proc "contextless" (characteristics: Image_Section_Characteristics) -> Image_Section_Flags {
-   return transmute(Image_Section_Flags) (characteristics & ~IMAGE_SECTION_ALIGN_MASK)
-}
 
 Image_Section_Header :: struct #align(4) {
    name:                   [8]u8,
@@ -56,7 +42,7 @@ Image_Section_Header :: struct #align(4) {
    characteristics:        Image_Section_Characteristics,
 }
 
-get_section_name :: proc(h: ^Image_Section_Header) -> []u8 {
+section_name :: proc(h: ^Image_Section_Header) -> []u8 {
    len: int
    for b in h.name {
       if b == '\x00' {
@@ -66,6 +52,20 @@ get_section_name :: proc(h: ^Image_Section_Header) -> []u8 {
    }
 
    return h.name[:len]
+}
+
+section_alignment :: proc "contextless" (characteristics: Image_Section_Characteristics) -> int {
+   align_bits := characteristics & IMAGE_SECTION_ALIGN_MASK
+
+   if align_bits != 0 {
+      return 1 << ((align_bits >> 20) - 1)
+   }
+
+   return 16
+}
+
+section_flags :: proc "contextless" (characteristics: Image_Section_Characteristics) -> Image_Section_Flags {
+   return transmute(Image_Section_Flags) (characteristics & ~IMAGE_SECTION_ALIGN_MASK)
 }
 
 read_section_headers :: proc(img: ^Decoded_Image, r: ^Binary_Reader) -> bool {
