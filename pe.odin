@@ -16,7 +16,9 @@ Decoded_Image :: struct {
    base_relocations: [dynamic]Base_Relocation_Entry,
 }
 
-image_load_from_memory :: proc(img: ^Decoded_Image) -> bool {
+image_load_from_memory :: proc(img: ^Decoded_Image, allocator := context.allocator) -> bool {
+   context.allocator = allocator
+
    r := reader_create(img.file_data)
 
    read_dos_header(img, &r) or_return
@@ -27,7 +29,7 @@ image_load_from_memory :: proc(img: ^Decoded_Image) -> bool {
    return true
 }
 
-image_load_from_file :: proc(file_path: string) -> (result: Decoded_Image, err: bool) {
+image_load_from_file :: proc(file_path: string, allocator := context.allocator) -> (result: Decoded_Image, err: bool) {
    data, map_err := virtual.map_file_from_path(file_path, {.Read})
    if map_err != nil {
       return {}, false
@@ -36,7 +38,7 @@ image_load_from_file :: proc(file_path: string) -> (result: Decoded_Image, err: 
    result.file_data = data
    result.owns_mapping = true
 
-   image_load_from_memory(&result) or_return
+   image_load_from_memory(&result, allocator) or_return
 
    return result, true
 }
@@ -61,4 +63,11 @@ image_va_to_offset :: proc(img: ^Decoded_Image, #any_int va: u32) -> (offset: u3
    }
 
    return 0, false
+}
+
+image_section_view :: proc(img: ^Decoded_Image, sh: ^Image_Section_Header) -> []u8 {
+   data := cast(int) sh.pointer_to_raw_data
+   size := cast(int) sh.size_of_raw_data
+
+   return img.file_data[data:data+size]
 }
